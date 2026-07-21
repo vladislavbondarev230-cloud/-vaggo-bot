@@ -1,0 +1,18 @@
+# Локально / на VPS:
+#   export BOT_TOKEN=...
+#   docker compose up -d
+services:
+  vaggo-bot:
+    build: .
+    restart: unless-stopped
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN:-}
+      OWNER_USER_IDS: ${OWNER_USER_IDS:-5740061551}
+      CHANNEL_ID: ${CHANNEL_ID:-@Vaggo01}
+      CHANNEL_USERNAME: ${CHANNEL_USERNAME:-Vaggo01}
+    volumes:
+      # живые данные (заказы, state, блоки) — не теряются при ребилде
+      - ./state.json:/app/state.json
+      - ./config.json:/app/config.json:ro
+      - ./media:/app/media
+    # если config с токеном — BOT_TOKEN можно не задавать

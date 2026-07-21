@@ -1,0 +1,75 @@
+{
+  "bot_token": "ВСТАВЬ_ТОКЕН_ОТ_BOTFATHER",
+  "owner_user_ids": [5740061551],
+  "owner_usernames": ["vagdar1"],
+  "channel_id": "@Vaggo01",
+  "channel_username": "Vaggo01",
+  "discussion_group_id": 0,
+  "proxy_url": "",
+
+  "brain": "auto",
+  "grok_model": "grok-4.5",
+  "grok_fast_model": "grok-4.3",
+  "grok_post_model": "grok-4.5",
+  "grok_full_model": "grok-4.5",
+  "grok_vision_model": "grok-4.5",
+  "xai_api_key": "",
+  "xai_base_url": "https://api.x.ai/v1",
+  "use_grok_session": true,
+
+  "grok_bridge_url": "",
+  "grok_bridge_secret": "",
+  "grok_bridge_discovery": "",
+  "grok_tools": true,
+  "grok_web_search": true,
+  "grok_x_search": true,
+
+  "ollama_url": "http://127.0.0.1:11434",
+  "ollama_model": "qwen2.5:7b",
+  "fast_model": "llama3.2:3b",
+
+  "auto_reply_comments": true,
+  "comment_needs_owner_ok": false,
+  "comment_prefer_fast": true,
+  "comment_max_tokens": 180,
+  "comment_max_chars": 450,
+  "auto_react_comments": true,
+  "auto_react_posts": true,
+  "auto_seed_comment": true,
+  "publish_needs_owner_ok": true,
+  "paused": false,
+
+  "bot_host_mode": "cloud",
+  "local_bot_disabled": true,
+
+  "sbp": {
+    "enabled": false,
+    "phone": "",
+    "bank": "СБП",
+    "name": "",
+    "link": "",
+    "qr_file": "media/sbp_qr.jpg",
+    "hide_phone": true,
+    "hint": "СБП. Сумма строго как в заявке."
+  },
+  "payments": {
+    "topup_enabled": false,
+    "provider": "platega"
+  },
+  "support": {
+    "telegram": "Vagdar1",
+    "bot": "DirectorVaggobot",
+    "channel": "Vaggo01"
+  },
+  "style": {
+    "brand": "Вагго",
+    "tone": "энергичный, дружеский, без воды, эмодзи уместно, обращение «Друзья»",
+    "rubrics": [
+      "Вечерний Вагго — философия и мистика",
+      "Битва нейросетей — тесты ИИ",
+      "Прокачка: тело в дело — спорт",
+      "Кибер-Лайфхак — фишки ПК/телефона",
+      "Новости проекта"
+    ]
+  }
+}

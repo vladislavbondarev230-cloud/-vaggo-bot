@@ -1,0 +1,14 @@
+﻿config.json
+state.json
+.env
+*.log
+__pycache__/
+*.pyc
+.deploy_sha
+auth.json
+grok_bridge.py
+panel.py
+app.py
+media/**
+!media/uploads/
+!media/uploads/.gitkeep
