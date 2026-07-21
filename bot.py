@@ -173,7 +173,11 @@ def owner_more_keyboard() -> dict:
             [{"text": "🧠  Состояние Grok", "callback_data": "menu:brains"}],
             [{"text": "💰  Балансы / касса", "callback_data": "menu:balance"}],
             [
-                {"text": "♻️  Restore участников", "callback_data": "menu:gwrestore"},
+                {"text": "📡  Финрадар", "callback_data": "menu:radar"},
+                {"text": "🔥  Горящие", "callback_data": "menu:hot"},
+            ],
+            [
+                {"text": "♻️  Restore GW", "callback_data": "menu:gwrestore"},
                 {"text": "📌  Кнопки поста", "callback_data": "menu:gfixkb"},
             ],
             [{"text": "🧹  Почистить личку", "callback_data": "menu:clean"}],
