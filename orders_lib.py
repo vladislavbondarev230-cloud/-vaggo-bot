@@ -564,6 +564,26 @@ def save_order(item: dict) -> dict:
     return item
 
 
+def append_event(item: dict, code: str, public_text: str) -> dict:
+    """Лента событий на карточке (последние 3)."""
+    ev = list(item.get("events") or [])
+    ev.append(
+        {
+            "ts": int(time.time()),
+            "code": str(code or "")[:32],
+            "text": str(public_text or "")[:200],
+        }
+    )
+    item["events"] = ev[-12:]
+    return save_order(item)
+
+
+def set_client_card(item: dict, *, chat_id: int, message_id: int) -> dict:
+    item["client_card_chat_id"] = int(chat_id)
+    item["client_card_message_id"] = int(message_id)
+    return save_order(item)
+
+
 def delete_order(oid: str, *, restore_free: bool = True) -> dict | None:
     """
     Удалить заказ из media/orders.json.
@@ -769,6 +789,13 @@ def format_order_card(item: dict, *, for_owner: bool = False) -> str:
     eta = eta_hint(item)
     oid = H.escape(str(item.get("id") or ""))
 
+    next_map = {
+        "new": "Дальше: оплата / подтверждение → старт",
+        "accepted": "Дальше: берём в работу",
+        "in_progress": "Дальше: делаем · пиши, если нужны правки ТЗ",
+        "done": "Дальше: проверь результат · гарантия 2 сут.",
+        "cancelled": "Дальше: /order если нужен новый",
+    }
     lines = [
         f"🛠 <b>Заказ</b> <code>{oid}</code>",
         f"{'━' * 16}",
@@ -777,16 +804,31 @@ def format_order_card(item: dict, *, for_owner: bool = False) -> str:
         f"<b>Этап</b>  {status_label(st)}",
         f"<code>{bar}</code>  {step}/{total}",
         f"<i>{H.escape(stage)}</i>",
+        f"➡️ {H.escape(next_map.get(st, '—'))}",
         "",
         f"👤 Ведёт: <b>{H.escape(worker)}</b>",
         f"⏱ Ориентир: <b>{H.escape(eta)}</b>",
-        "",
-        f"<b>ТЗ</b>",
-        H.escape((item.get("brief") or "—")[:700]),
-        "",
-        "⚠️ Хостинг / VPS / домен — не входят.",
-        "🛡 Гарантия 2 сут. · правки 1 сут. · /terms",
+        f"🕒 обновлено: {time.strftime('%d.%m %H:%M', time.localtime(int(item.get('updated_at') or time.time())))}",
     ]
+    # timeline tail
+    events = list(item.get("events") or [])[-3:]
+    if events:
+        lines.append("")
+        lines.append("<b>История</b>")
+        for e in events:
+            ts = int(e.get("ts") or 0)
+            when = time.strftime("%d.%m %H:%M", time.localtime(ts)) if ts else "—"
+            lines.append(f"· {when} — {H.escape(str(e.get('text') or e.get('code') or ''))}")
+    lines.extend(
+        [
+            "",
+            f"<b>ТЗ</b>",
+            H.escape((item.get("brief") or "—")[:550]),
+            "",
+            "⚠️ Хостинг / VPS / домен — не входят.",
+            "🛡 Гарантия 2 сут. · правки 1 сут. · /terms",
+        ]
+    )
     if for_owner:
         un = item.get("username")
         who = f"@{un}" if un else item.get("name")

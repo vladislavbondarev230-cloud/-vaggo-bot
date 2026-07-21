@@ -5931,6 +5931,50 @@ def handle_orders_private(cfg: dict, state: dict, msg: dict) -> bool:
     return False
 
 
+def _push_client_order_card(cfg: dict, item: dict, *, delta: str | None = None) -> None:
+    """
+    Живая карточка: edit старого сообщения, иначе send + запомнить mid.
+    Опционально короткий delta-пуш.
+    """
+    uid = int(item.get("user_id") or 0)
+    if not uid:
+        return
+    body = orders.format_order_card(item)
+    kb = orders.user_order_actions_keyboard(str(item.get("id")))
+    card_chat = item.get("client_card_chat_id") or uid
+    card_mid = item.get("client_card_message_id")
+    edited = False
+    if card_mid:
+        try:
+            tg.edit_message_text(
+                cfg,
+                card_chat,
+                int(card_mid),
+                body,
+                parse_mode="HTML",
+                reply_markup=kb,
+                disable_preview=True,
+            )
+            edited = True
+        except Exception as e:
+            print("order card edit", e, flush=True)
+    if not edited:
+        try:
+            res = tg.send_message(
+                cfg, uid, body, parse_mode="HTML", reply_markup=kb, disable_preview=True
+            )
+            mid = (res or {}).get("message_id")
+            if mid:
+                orders.set_client_card(item, chat_id=uid, message_id=int(mid))
+        except Exception as e:
+            print("order card send", e, flush=True)
+    if delta:
+        try:
+            tg.send_message(cfg, uid, delta, parse_mode="HTML", disable_preview=True)
+        except Exception:
+            pass
+
+
 def _owner_set_order_status(cfg: dict, state: dict, cq: dict, oid: str, status: str) -> bool:
     """Владелец: сменить статус + уведомить клиента. Всегда load свежий state."""
     user = cq.get("from") or {}
@@ -5940,7 +5984,10 @@ def _owner_set_order_status(cfg: dict, state: dict, cq: dict, oid: str, status: 
     item = orders.get_order(oid)
     if not item:
         # диагностика
-        all_ids = list((orders._root().get("items") or {}).keys())
+        try:
+            all_ids = list((orders.load_orders().get("items") or {}).keys())
+        except Exception:
+            all_ids = []
         tg.answer_callback(
             cfg,
             cq["id"],
@@ -5952,23 +5999,31 @@ def _owner_set_order_status(cfg: dict, state: dict, cq: dict, oid: str, status: 
     chat_id = (msg.get("chat") or {}).get("id")
     item["status"] = status
     orders.save_order(item)
+    # timeline
+    ev_map = {
+        "in_progress": "взят в работу",
+        "done": "готов · сдача",
+        "cancelled": "отменён",
+        "accepted": "принят",
+        "new": "новый",
+    }
+    try:
+        orders.append_event(item, status, ev_map.get(status, status))
+        item = orders.get_order(oid) or item
+    except Exception:
+        pass
     client_msgs = {
         "in_progress": (
-            f"🛠 <b>Заказ в работе</b>\n"
-            f"код: <code>{html.escape(oid)}</code>\n"
-            f"{orders.status_label('in_progress')}\n\n"
-            f"Скоро пришлём результат сюда.\n"
-            f"Статус: /myorders"
+            f"🛠 <b>#{html.escape(oid[:8])}</b> — в работе.\n"
+            f"Карточка обновлена. Вопросы — кнопкой «Вопрос по проекту»."
         ),
         "done": (
-            f"✔️ <b>Заказ готов</b>\n"
-            f"код: <code>{html.escape(oid)}</code>\n"
-            f"Файл придёт следующим сообщением (или уже ушёл).\n"
-            f"/myorders"
+            f"✔️ <b>#{html.escape(oid[:8])}</b> — готово.\n"
+            f"Файл/результат придёт отдельно. Прими или напиши правки."
         ),
         "cancelled": (
-            f"❌ Заказ <code>{html.escape(oid)}</code> отменён.\n"
-            f"Новый: /order · история: /myorders"
+            f"❌ <b>#{html.escape(oid[:8])}</b> отменён.\n"
+            f"Новый: /order"
         ),
     }
     if status == "in_progress":
@@ -5989,22 +6044,18 @@ def _owner_set_order_status(cfg: dict, state: dict, cq: dict, oid: str, status: 
         tg.answer_callback(cfg, cq["id"], "Отменён", show_alert=False)
     else:
         tg.answer_callback(cfg, cq["id"], status)
+    # живая карточка + короткий delta
     try:
-        text = client_msgs.get(status)
-        if text:
-            tg.send_message(
-                cfg,
-                int(item["user_id"]),
-                text,
-                parse_mode="HTML",
-                reply_markup=orders.user_order_actions_keyboard(oid),
-            )
+        _push_client_order_card(cfg, item, delta=client_msgs.get(status))
     except Exception as e:
-        print("order client notify", e, flush=True)
+        print("push client card", e, flush=True)
     if chat_id and status != "done":
         try:
             tg.send_message(
-                cfg, chat_id, f"OK · <code>{html.escape(oid)}</code> → {status}", parse_mode="HTML"
+                cfg,
+                chat_id,
+                f"OK · <code>{html.escape(oid)}</code> → {status}",
+                parse_mode="HTML",
             )
         except Exception:
             pass
@@ -6074,7 +6125,7 @@ def handle_orders_callback(cfg: dict, state: dict, cq: dict) -> bool:
                 return True
         tg.answer_callback(cfg, cq["id"], orders.status_label(str(item.get("status"))))
         if chat_id:
-            ui_edit_or_send(
+            mid_out = ui_edit_or_send(
                 cfg,
                 chat_id,
                 orders.format_order_card(item),
@@ -6084,6 +6135,11 @@ def handle_orders_callback(cfg: dict, state: dict, cq: dict) -> bool:
                 uid=uid,
                 store_key="order_ui_msg",
             )
+            try:
+                if mid_out:
+                    orders.set_client_card(item, chat_id=int(chat_id), message_id=int(mid_out))
+            except Exception:
+                pass
             save_state(state)
         return True
 
