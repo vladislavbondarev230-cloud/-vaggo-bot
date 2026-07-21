@@ -58,8 +58,8 @@ from state import (
 import tg
 
 _last_queue_tick = 0.0
-# 4.0.0 — final UX polish (pro-bot style: one screen, clean CTAs)
-BOT_CODE_VERSION = "4.0.0"
+# 4.2.0 — teamlead, finance radar, interim reports, upsell/risks
+BOT_CODE_VERSION = "4.2.0"
 
 
 def is_owner(cfg: dict, user: dict | None) -> bool:
@@ -136,34 +136,48 @@ def comment_keyboard(cid: str) -> dict:
 
 
 def main_menu_keyboard() -> dict:
-    """Пульт 4.0 — как у топ-ботов: коротко, 2 колонки, без каши."""
+    """
+    Пульт владельца 4.1 — широкие главные кнопки + вторичка.
+    callback_data прежние menu:* .
+    """
     return {
         "inline_keyboard": [
+            [{"text": "📊  Сегодня · сводка", "callback_data": "menu:stats"}],
             [
-                {"text": "📊 Сводка", "callback_data": "menu:stats"},
-                {"text": "📅 Очередь", "callback_data": "menu:queue"},
+                {"text": "📅  Очередь", "callback_data": "menu:queue"},
+                {"text": "🚀  Выложить", "callback_data": "menu:qnow"},
             ],
             [
-                {"text": "🚀 Next пост", "callback_data": "menu:qnow"},
-                {"text": "⏸ / ▶️", "callback_data": "menu:toggle_pause"},
+                {"text": "⏸  Пауза канала", "callback_data": "menu:toggle_pause"},
             ],
             [
-                {"text": "📝 Черновики", "callback_data": "menu:drafts"},
-                {"text": "💬 Комменты", "callback_data": "menu:comments"},
+                {"text": "🎁  Розыгрыш", "callback_data": "menu:giveaway"},
+                {"text": "🛠  Заказы", "callback_data": "menu:orders"},
             ],
             [
-                {"text": "🎁 Розыгрыш", "callback_data": "menu:giveaway"},
-                {"text": "🛠 Заказы", "callback_data": "menu:orders"},
+                {"text": "💬  Комменты", "callback_data": "menu:comments"},
+                {"text": "📝  Черновики", "callback_data": "menu:drafts"},
             ],
             [
-                {"text": "💰 Баланс", "callback_data": "menu:balance"},
-                {"text": "🧠 Grok", "callback_data": "menu:brains"},
+                {"text": "⚙️  Сервис", "callback_data": "menu:more"},
+                {"text": "🔄  Обновить", "callback_data": "menu:fresh"},
             ],
+        ]
+    }
+
+
+def owner_more_keyboard() -> dict:
+    """Сервис — отдельно от ежедневного пульта."""
+    return {
+        "inline_keyboard": [
+            [{"text": "🧠  Состояние Grok", "callback_data": "menu:brains"}],
+            [{"text": "💰  Балансы / касса", "callback_data": "menu:balance"}],
             [
-                {"text": "♻️ Restore GW", "callback_data": "menu:gwrestore"},
-                {"text": "📌 Пост GW", "callback_data": "menu:gfixkb"},
+                {"text": "♻️  Restore участников", "callback_data": "menu:gwrestore"},
+                {"text": "📌  Кнопки поста", "callback_data": "menu:gfixkb"},
             ],
-            [{"text": "🔄 Обновить", "callback_data": "menu:fresh"}],
+            [{"text": "🧹  Почистить личку", "callback_data": "menu:clean"}],
+            [{"text": "«  Назад в пульт", "callback_data": "menu:home"}],
         ]
     }
 
@@ -172,58 +186,100 @@ def menu_result_keyboard(_group: str | None = None) -> dict:
     return {
         "inline_keyboard": [
             [
-                {"text": "🏠 Меню", "callback_data": "menu:home"},
-                {"text": "🎁 Розыгрыш", "callback_data": "menu:giveaway"},
+                {"text": "🏠  Пульт", "callback_data": "menu:home"},
+                {"text": "🎁  Розыгрыш", "callback_data": "menu:giveaway"},
             ]
         ]
     }
 
 
 def owner_home_html() -> str:
-    act = None
+    paused = False
     try:
-        act = gw.get_active()
+        from state import load_config as _lc
+
+        paused = bool((_lc() or {}).get("paused"))
     except Exception:
         pass
-    gw_line = "🎁 Розыгрыш: нет активного"
-    if act:
-        try:
+    ch_status = "⏸ канал на паузе" if paused else "🟢 канал публикует"
+
+    # розыгрыш
+    gw_block = "🎁  <b>Розыгрыш</b>\n     нет активного"
+    try:
+        act = gw.get_active()
+        if act:
             n = gw.entry_count(act, complete_only=True)
             need = gw.min_complete_needed(act) or 10
             mid = act.get("channel_message_id") or "—"
-            prize = str(act.get("prize") or "")[:42]
-            gw_line = (
-                f"🎁 <b>Розыгрыш</b> · {n}/{need} в барабане\n"
-                f"   {html.escape(prize)}\n"
-                f"   пост {mid}"
+            prize = html.escape(str(act.get("prize") or "")[:36])
+            # mini bar
+            filled = min(10, max(0, int(round(10 * n / max(need, 1)))))
+            bar = "▓" * filled + "░" * (10 - filled)
+            gw_block = (
+                f"🎁  <b>Розыгрыш</b>  <code>{n}/{need}</code>\n"
+                f"     <code>{bar}</code>\n"
+                f"     {prize}\n"
+                f"     пост · {mid}"
             )
-        except Exception:
-            gw_line = "🎁 Розыгрыш: active"
-    # queue peek
-    q_line = "📅 Очередь: —"
+    except Exception:
+        pass
+
+    # очередь
+    q_block = "📅  <b>Очередь</b>\n     пусто"
     try:
         from queue_lib import summary as queue_summary
 
         qs = queue_summary()
         nxt = qs.get("next") or {}
-        q_line = (
-            f"📅 Очередь: <b>{qs.get('queued') or 0}</b> ждут"
-            + (
-                f" · next {html.escape(str(nxt.get('publish_at') or '')[:16])}"
-                if nxt
-                else ""
+        nq = int(qs.get("queued") or 0)
+        if nq:
+            when = html.escape(str(nxt.get("publish_at") or "—")[:16])
+            title = html.escape(str(nxt.get("title") or nxt.get("id") or "—")[:32])
+            q_block = (
+                f"📅  <b>Очередь</b>  <code>{nq}</code> ждут\n"
+                f"     next · {when}\n"
+                f"     {title}"
             )
-        )
     except Exception:
         pass
+
+    # комменты + заказы
+    pend = 0
+    try:
+        from state import load_state as _ls
+
+        pend = len((_ls() or {}).get("pending_comments") or [])
+    except Exception:
+        pass
+    c_block = (
+        f"💬  <b>Комменты</b>  ждут ответа · <code>{pend}</code>"
+        if pend
+        else "💬  <b>Комменты</b>  чисто"
+    )
+
+    ord_n = 0
+    try:
+        open_o = [
+            x
+            for x in orders.list_orders(limit=50)
+            if str(x.get("status") or "") in ("new", "accepted", "in_progress")
+        ]
+        ord_n = len(open_o)
+    except Exception:
+        pass
+    o_block = f"🛠  <b>Заказы</b>  в работе · <code>{ord_n}</code>"
+
     return (
-        f"🎛 <b>Director Vaggo</b> · <code>{BOT_CODE_VERSION}</code>\n"
-        f"{'━' * 14}\n"
-        f"{gw_line}\n"
-        f"{q_line}\n\n"
-        f"Одно окно · жми кнопку\n"
-        f"Фото/видео сюда = черновик\n\n"
-        f"<i>/ping · /queue · /gstatus</i>"
+        f"<b>DIRECTOR VAGGO</b>\n"
+        f"<code>v{BOT_CODE_VERSION}</code>  ·  {ch_status}\n"
+        f"{'━' * 18}\n\n"
+        f"{gw_block}\n\n"
+        f"{q_block}\n\n"
+        f"{c_block}\n"
+        f"{o_block}\n\n"
+        f"{'━' * 18}\n"
+        f"📷 Фото/видео в этот чат → черновик\n"
+        f"<i>Главное — кнопки ниже · сервис в «⚙️»</i>"
     )
 
 
@@ -1520,6 +1576,40 @@ def handle_owner_menu_callback(
         return True
     if raw == "fresh":
         home(force=True)
+        return True
+    if raw == "more":
+        # сервисное подменю — только UI, без смены логики
+        _owner_panel(
+            cfg,
+            state,
+            chat_id,
+            mid,
+            uid_m,
+            f"⚙️  <b>Сервис</b>\n"
+            f"{'━' * 16}\n"
+            f"Grok · касса · радар · restore · кнопки · чистка\n\n"
+            f"Или напиши: «какие заказы горят», «финрадар»\n"
+            f"<i>Назад — в основной пульт</i>",
+            owner_more_keyboard(),
+        )
+        return True
+    if raw == "radar":
+        try:
+            import growth_lib as growth
+
+            body = growth.finance_radar_html()
+        except Exception as e:
+            body = f"❌ {html.escape(str(e)[:200])}"
+        _owner_panel(cfg, state, chat_id, mid, uid_m, body, menu_result_keyboard())
+        return True
+    if raw == "hot":
+        try:
+            import growth_lib as growth
+
+            body = growth.team_lead_html("какие заказы горят") or "Нет данных."
+        except Exception as e:
+            body = f"❌ {html.escape(str(e)[:200])}"
+        _owner_panel(cfg, state, chat_id, mid, uid_m, body, menu_result_keyboard())
         return True
     if raw == "clean":
         handle_owner_system(
@@ -4882,6 +4972,25 @@ def _order_show_estimate(
             parts.append(
                 "<b>Законность:</b> " + html.escape(str(rev["legal_reason"])[:250])
             )
+        if rev.get("risk_delay") or rev.get("risk_scope"):
+            parts.append(
+                f"📉 риски: сроки <b>{html.escape(str(rev.get('risk_delay') or '—'))}</b> · "
+                f"объём <b>{html.escape(str(rev.get('risk_scope') or '—'))}</b>"
+            )
+        if rev.get("upsell"):
+            parts.append(
+                "💡 <b>Имеет смысл добавить:</b> "
+                + html.escape(str(rev["upsell"])[:280])
+            )
+        # похожие проекты
+        try:
+            import growth_lib as growth
+
+            sim = growth.similar_orders_html(brief, kind=kind)
+            if sim:
+                parts.append(sim)
+        except Exception:
+            pass
         eng = rev.get("engine") or ""
         if eng:
             parts.append(f"<i>engine: {html.escape(str(eng))}</i>")
@@ -5062,6 +5171,136 @@ def _order_run_ai_review(
     )
 
 
+def handle_owner_teamlead(cfg: dict, state: dict, msg: dict) -> bool:
+    """
+    Тимлид: владелец пишет обычным языком
+    «горят заказы», «финрадар», «сводка» — или /tl /radar /hot.
+    """
+    chat = msg.get("chat") or {}
+    if chat.get("type") != "private":
+        return False
+    user = msg.get("from") or {}
+    if not is_owner(cfg, user):
+        return False
+    text = (msg.get("text") or "").strip()
+    if not text:
+        return False
+    chat_id = chat.get("id")
+    lower = text.lower()
+    cmd = lower.split()[0].split("@")[0] if lower.startswith("/") else ""
+
+    # явные команды
+    force = False
+    q = text
+    if cmd in ("/tl", "/тимлид", "/team", "/lead"):
+        force = True
+        q = text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1)) > 1 else "сводка"
+    elif cmd in ("/radar", "/finance", "/фин", "/кассa", "/касса"):
+        force = True
+        q = "финансовый радар"
+    elif cmd in ("/hot", "/горит", "/горят"):
+        force = True
+        q = "какие заказы горят"
+    elif text.startswith("/"):
+        return False
+    else:
+        # естественный язык — только если похоже на бизнес-вопрос
+        keys = (
+            "заказ",
+            "горят",
+            "горит",
+            "сводк",
+            "маржин",
+            "финанс",
+            "касс",
+            "деньг",
+            "радар",
+            "в работе",
+            "сдать",
+            "дедлайн",
+            "открыт",
+            "кто ",
+            "покажи",
+            "сколько",
+        )
+        if not any(k in lower for k in keys):
+            return False
+        # не перехватывать короткие ответы в чужих флоу
+        if state.get("order_draft", {}).get(str(user.get("id"))):
+            return False
+
+    try:
+        import growth_lib as growth
+
+        html_out = growth.team_lead_html(q)
+        if not html_out and force:
+            html_out = growth.team_lead_grok(cfg, q)
+        if not html_out:
+            return False
+        tg.send_message(cfg, chat_id, html_out, parse_mode="HTML", disable_preview=True)
+        return True
+    except Exception as e:
+        print("teamlead", e, flush=True)
+        if force:
+            tg.send_message(cfg, chat_id, f"❌ тимлид: {html.escape(str(e)[:200])}")
+            return True
+        return False
+
+
+def tick_order_reports(cfg: dict) -> None:
+    """Авто-прогресс клиентам по in_progress раз в ~2.5 суток."""
+    if cfg.get("paused"):
+        return
+    try:
+        import growth_lib as growth
+
+        due = growth.due_interim_reports()
+    except Exception as e:
+        print("interim due", e, flush=True)
+        return
+    for item in due[:3]:  # не спамить пачкой
+        try:
+            uid = int(item.get("user_id") or 0)
+            if not uid:
+                continue
+            body = growth.build_interim_report(cfg, item)
+            tg.send_message(cfg, uid, body, parse_mode="HTML", disable_preview=True)
+            growth.mark_report_sent(item)
+            print("interim report", item.get("id"), "->", uid, flush=True)
+        except Exception as e:
+            print("interim send", item.get("id"), e, flush=True)
+
+
+_last_finance_digest = 0.0
+
+
+def tick_finance_digest(cfg: dict) -> None:
+    """Раз в ~сутки — короткий радар владельцу."""
+    global _last_finance_digest
+    now = time.time()
+    if now - _last_finance_digest < 20 * 3600:
+        return
+    # только если есть открытые заказы
+    try:
+        work = [
+            x
+            for x in orders.list_orders(limit=40)
+            if str(x.get("status") or "") in ("new", "accepted", "in_progress")
+        ]
+        if not work:
+            _last_finance_digest = now
+            return
+        import growth_lib as growth
+
+        body = "📬 <b>Ежедневный радар</b>\n\n" + growth.finance_radar_html()
+        oid = owner_chat_id(cfg)
+        if oid:
+            tg.send_message(cfg, oid, body, parse_mode="HTML", disable_preview=True)
+        _last_finance_digest = now
+    except Exception as e:
+        print("finance digest", e, flush=True)
+
+
 def handle_owner_system(cfg: dict, state: dict, msg: dict) -> bool:
     """
     Служебные команды владельца — САМЫЕ ПЕРВЫЕ (до заказов/тикетов),
@@ -5074,6 +5313,9 @@ def handle_owner_system(cfg: dict, state: dict, msg: dict) -> bool:
     if not is_owner(cfg, user):
         return False
     text = (msg.get("text") or "").strip()
+    # тимлид: и /команды, и естественный язык
+    if handle_owner_teamlead(cfg, state, msg):
+        return True
     if not text.startswith("/"):
         return False
     chat_id = chat.get("id")
@@ -5342,6 +5584,39 @@ def handle_orders_private(cfg: dict, state: dict, msg: dict) -> bool:
     owner = is_owner(cfg, user)
     lower = text.lower()
     cmd = lower.split()[0].split("@")[0] if lower.startswith("/") else ""
+
+    # вопрос по проекту (с карточки заказа)
+    aq = (state.get("await_order_question") or {}).get(str(uid))
+    if aq and text and not text.startswith("/"):
+        oid = str(aq.get("order_id") or "")
+        state.setdefault("await_order_question", {}).pop(str(uid), None)
+        save_state(state)
+        item = orders.get_order(oid) if oid else None
+        tg.send_message(
+            cfg,
+            chat_id,
+            f"✅ Вопрос по <code>{html.escape(oid)}</code> отправлен.\n"
+            f"Ответим здесь.\n\n"
+            f"/myorders — карточка заказа",
+            parse_mode="HTML",
+        )
+        try:
+            notify_owner(
+                cfg,
+                f"💬 <b>Вопрос по заказу</b> <code>{html.escape(oid)}</code>\n"
+                f"от {html.escape(name)} "
+                f"(@{html.escape(uname) if uname else '—'})\n"
+                f"статус: {html.escape(str((item or {}).get('status') or '—'))}\n\n"
+                f"{html.escape(text[:1200])}",
+            )
+        except Exception:
+            pass
+        return True
+    if aq and cmd in ("/cancel", "/отмена"):
+        state.setdefault("await_order_question", {}).pop(str(uid), None)
+        save_state(state)
+        tg.send_message(cfg, chat_id, "Ок, вопрос отменён.")
+        return True
 
     # любые slash-команды — не трогаем (иначе /redeploy «проглатывается»)
     if text.startswith("/"):
@@ -5798,10 +6073,48 @@ def handle_orders_callback(cfg: dict, state: dict, cq: dict) -> bool:
             ui_edit_or_send(
                 cfg,
                 chat_id,
-                "📦 <b>Статус</b>\n\n"
-                + orders.format_order_card(item)
-                + f"\n\n{orders.status_label(str(item.get('status')))}",
+                orders.format_order_card(item),
                 reply_markup=orders.user_order_actions_keyboard(oid),
+                message_id=cb_mid,
+                state=state,
+                uid=uid,
+                store_key="order_ui_msg",
+            )
+            save_state(state)
+        return True
+
+    if action == "ask" and len(parts) >= 3:
+        # вопрос по проекту → ждём текст, уйдёт в support/owner
+        oid = parts[2]
+        item = orders.get_order(oid)
+        if not item or int(item.get("user_id") or 0) != uid:
+            tg.answer_callback(cfg, cq["id"], "Заказ не найден", show_alert=True)
+            return True
+        state.setdefault("await_order_question", {})[str(uid)] = {
+            "order_id": oid,
+            "ts": int(time.time()),
+        }
+        save_state(state)
+        tg.answer_callback(cfg, cq["id"], "Пиши вопрос")
+        if chat_id:
+            ui_edit_or_send(
+                cfg,
+                chat_id,
+                f"💬 <b>Вопрос по заказу</b> <code>{html.escape(oid)}</code>\n\n"
+                f"Напиши одним сообщением, что уточнить.\n"
+                f"Ответим в личку.\n\n"
+                f"<i>/cancel — отмена</i>",
+                reply_markup={
+                    "inline_keyboard": [
+                        [
+                            {
+                                "text": "« К карточке",
+                                "callback_data": f"ord:status:{oid}",
+                            }
+                        ],
+                        [{"text": "❌ Отмена", "callback_data": "ord:cancel"}],
+                    ]
+                },
                 message_id=cb_mid,
                 state=state,
                 uid=uid,
@@ -7342,6 +7655,9 @@ def run() -> None:
         {"command": "gwrestore", "description": "Restore участников"},
         {"command": "gfixkb", "description": "Кнопки на пост GW"},
         {"command": "orders", "description": "Заказы"},
+        {"command": "radar", "description": "Финрадар"},
+        {"command": "hot", "description": "Горящие заказы"},
+        {"command": "tl", "description": "Тимлид: вопрос текстом"},
         {"command": "clean", "description": "Почистить ЛС"},
         {"command": "redeploy", "description": "GitHub update"},
         {"command": "brains", "description": "Grok статус"},
@@ -7376,6 +7692,14 @@ def run() -> None:
                 tick_giveaways(cfg)
             except Exception as ge:
                 print("giveaway tick error", ge, flush=True)
+            try:
+                tick_order_reports(cfg)
+            except Exception as re:
+                print("order report tick", re, flush=True)
+            try:
+                tick_finance_digest(cfg)
+            except Exception as fe:
+                print("finance digest tick", fe, flush=True)
             updates = tg.get_updates(cfg, offset=offset, timeout=25)
             dirty = False
             for u in updates:

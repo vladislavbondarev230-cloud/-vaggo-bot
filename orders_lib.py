@@ -78,10 +78,19 @@ ORDER_TYPES: dict[str, dict[str, Any]] = {
 
 STATUS_LABELS = {
     "new": "🆕 новый — ждём принятия",
-    "accepted": "✅ принят",
+    "accepted": "✅ принят / оплачен",
     "in_progress": "🛠 в работе",
-    "done": "✔️ готов",
+    "done": "✔️ готов · сдан",
     "cancelled": "❌ отменён",
+}
+
+# этап для живой карточки: (шаг, всего, подпись)
+STATUS_PIPELINE: dict[str, tuple[int, int, str]] = {
+    "new": (1, 4, "Заявка создана · ждём оплату / старт"),
+    "accepted": (2, 4, "В очереди · скоро в работу"),
+    "in_progress": (3, 4, "Делаем · можно писать по проекту"),
+    "done": (4, 4, "Сдано · гарантия и правки по /terms"),
+    "cancelled": (0, 4, "Заказ закрыт"),
 }
 
 # Опрос ТЗ: после «что сделать» — цвета, функционал, пример…
@@ -291,11 +300,16 @@ def review_tz_with_ai(
         '  "legal_reason": "почему",\n'
         '  "feasible": true/false,\n'
         '  "feasible_reason": "влезает ли в тариф/срок",\n'
-        '  "risk": "ok" | "warn" | "block"\n'
+        '  "risk": "ok" | "warn" | "block",\n'
+        '  "upsell": "1 мягкое предложение доп.услуги (или пусто)",\n'
+        '  "risk_delay": "низкий|средний|высокий — срыв сроков",\n'
+        '  "risk_scope": "низкий|средний|высокий — раздувание ТЗ",\n'
+        '  "dev_brief": "короткое ТЗ для исполнителя 400-900 знаков"\n'
         "}\n"
         "block = незаконно / мошенничество / вред / обход закона.\n"
         "warn = слишком большой объём на тариф, неясность, но можно взять с оговорками.\n"
         "ok = можно брать.\n"
+        "upsell: мягко, 1 идея (бот к сайту, админка, оплата…) — без давления.\n"
         "Не выдумывай факты о клиенте. Не предлагай взлом, скам, malware.\n"
         "Цена фиксирована — не меняй сумму, только оцени объём.\n"
         "legal_ok=false / risk=block ТОЛЬКО при явной незаконности "
@@ -374,6 +388,10 @@ def review_tz_with_ai(
         if risk == "block" and rule_illegal:
             feasible = False
 
+        upsell = str(data.get("upsell") or "").strip()[:300]
+        dev_brief = str(data.get("dev_brief") or "").strip()[:1200]
+        risk_delay = str(data.get("risk_delay") or "средний").lower()[:20]
+        risk_scope = str(data.get("risk_scope") or "средний").lower()[:20]
         return {
             "brief": brief[:4000],
             "summary": str(data.get("summary") or "")[:800],
@@ -386,6 +404,10 @@ def review_tz_with_ai(
             "feasible": feasible,
             "feasible_reason": str(data.get("feasible_reason") or "")[:400],
             "risk": risk,
+            "upsell": upsell,
+            "dev_brief": dev_brief,
+            "risk_delay": risk_delay,
+            "risk_scope": risk_scope,
             "engine": "grok",
             "legal_hits": legal_hits,
         }
@@ -614,6 +636,38 @@ def status_label(status: str) -> str:
     return STATUS_LABELS.get(str(status or ""), str(status or "—"))
 
 
+def progress_bar(step: int, total: int = 4, width: int = 8) -> str:
+    total = max(1, int(total))
+    step = max(0, min(int(step), total))
+    filled = int(round(width * step / total))
+    return "█" * filled + "░" * (width - filled)
+
+
+def pipeline_info(status: str) -> tuple[int, int, str]:
+    return STATUS_PIPELINE.get(str(status or ""), (1, 4, status_label(status)))
+
+
+def eta_hint(item: dict) -> str:
+    """Грубый дедлайн для клиента (не юридический)."""
+    st = str(item.get("status") or "")
+    # из ТЗ если клиент писал срок
+    brief = str(item.get("brief") or "")
+    for line in brief.splitlines():
+        if "Срок:" in line or "срок:" in line:
+            raw = line.split(":", 1)[-1].strip()
+            if raw and raw.lower() not in ("не горит", "на усмотрение", "—"):
+                return raw[:80]
+    if st == "new":
+        return "после оплаты · обычно в тот же / след. день"
+    if st == "accepted":
+        return "1–3 дня до старта (загрузка)"
+    if st == "in_progress":
+        return "смотри срок в ТЗ · пиши, если горит"
+    if st == "done":
+        return "сдан · гарантия 2 сут."
+    return "—"
+
+
 def format_user_history(user_id: int) -> str:
     import html as H
 
@@ -672,9 +726,11 @@ def order_keyboard_types() -> dict:
 
 
 def user_order_actions_keyboard(oid: str) -> dict:
+    oid = str(oid)
     return {
         "inline_keyboard": [
-            [{"text": "🔄 Статус", "callback_data": f"ord:status:{oid}"}],
+            [{"text": "🔄 Обновить статус", "callback_data": f"ord:status:{oid}"}],
+            [{"text": "💬 Вопрос по проекту", "callback_data": f"ord:ask:{oid}"}],
             [
                 {"text": "📦 Все заказы", "callback_data": "ord:mine"},
                 {"text": "🛠 Новый", "callback_data": "ord:restart"},
@@ -701,25 +757,50 @@ def owner_order_keyboard(oid: str) -> dict:
 
 
 def format_order_card(item: dict, *, for_owner: bool = False) -> str:
+    """Живая карточка: этап, прогресс, кто ведёт, дедлайн, ТЗ."""
     import html as H
 
     kind = ORDER_TYPES.get(item.get("kind") or "", {}).get("title") or item.get("kind")
     price = f"{item.get('price')} ₽"
+    st = str(item.get("status") or "new")
+    step, total, stage = pipeline_info(st)
+    bar = progress_bar(step, total, width=8)
+    worker = str(item.get("assignee_name") or "команда Вагго")
+    eta = eta_hint(item)
+    oid = H.escape(str(item.get("id") or ""))
+
     lines = [
-        f"🛠 <b>Заказ</b> <code>{H.escape(str(item.get('id')))}</code>",
-        f"тип: <b>{H.escape(str(kind))}</b>",
-        f"цена: <b>{price}</b> (фикс. тариф)",
-        f"статус: {status_label(str(item.get('status') or ''))}",
+        f"🛠 <b>Заказ</b> <code>{oid}</code>",
+        f"{'━' * 16}",
+        f"<b>{H.escape(str(kind))}</b> · {price}",
         "",
-        f"<b>ТЗ:</b>\n{H.escape((item.get('brief') or '')[:900])}",
+        f"<b>Этап</b>  {status_label(st)}",
+        f"<code>{bar}</code>  {step}/{total}",
+        f"<i>{H.escape(stage)}</i>",
         "",
-        "⚠️ <i>Хостинг / VPS / домен — не входят. Даёшь доступы сам.</i>",
-        "🛡 <i>Гарантия 2 сут. · правки 1 сут. → /terms · /prices</i>",
+        f"👤 Ведёт: <b>{H.escape(worker)}</b>",
+        f"⏱ Ориентир: <b>{H.escape(eta)}</b>",
+        "",
+        f"<b>ТЗ</b>",
+        H.escape((item.get("brief") or "—")[:700]),
+        "",
+        "⚠️ Хостинг / VPS / домен — не входят.",
+        "🛡 Гарантия 2 сут. · правки 1 сут. · /terms",
     ]
     if for_owner:
         un = item.get("username")
         who = f"@{un}" if un else item.get("name")
-        lines.insert(1, f"от: {H.escape(str(who))} · <code>{item.get('user_id')}</code>")
+        lines.insert(
+            2,
+            f"клиент: {H.escape(str(who))} · <code>{item.get('user_id')}</code>",
+        )
+    # upsell soft line if done
+    if st == "done":
+        lines.append("")
+        lines.append(
+            "💡 <i>Часто к такому заказу берут бот-заявки или доработки — "
+            "спроси в «Вопрос по проекту» или /order.</i>"
+        )
     return "\n".join(lines)
 
 
